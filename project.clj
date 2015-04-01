@@ -26,7 +26,13 @@
            :notify-command ["phantomjs" :cljs.test/runner "target/unit-test.js"]
            :compiler {:output-to "target/unit-test.js"
                       :optimizations :whitespace
-                      :pretty-print true}}}}
+                      :pretty-print true}}
+    :dce-test {:source-paths ["src" "test"]
+               :incremental? false
+               :compiler {:output-to "target/dce-test.js"
+                          :main cljs-time.dce-compile-test
+                          :optimizations :advanced
+                          :pretty-print false}}}}
   :profiles
   {:prod
    {:hooks [leiningen.cljsbuild]
