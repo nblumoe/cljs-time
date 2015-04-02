@@ -32,6 +32,7 @@
     [clojure.string :as string]
     [goog.date :as date]
     [goog.i18n.DateTimeParse]
+    [goog.i18n.DateTimeFormat]
     [goog.string :as gstring]
     [goog.string.format]))
 
@@ -161,47 +162,9 @@
         (.setTime d (.getTime adjusted))))
     d))
 
-(def date-parsers int-fmt/date-parsers)
-
-(def date-setters
-  {:years #(.setYear %1 %2)
-   :months #(.setMonth %1 %2)
-   :days #(.setDate %1 %2)
-   :hours #(.setHours %1 %2)
-   :minutes #(.setMinutes %1 %2)
-   :seconds #(.setSeconds %1 %2)
-   :millis #(.setMilliseconds %1 %2)
-   :time-zone timezone-adjustment})
-
-(defn parser-sort-order-pred [parser]
-  (index-of
-    ["YYYY" "YY" "Y" "yyyy" "yy" "y" "d" "dd" "D" "DD" "DDD" "dth"
-     "M" "MM" "MMM" "MMMM" "dow" "h" "H" "m" "s" "S" "hh" "HH" "mm" "ss" "a"
-     "SSS" "Z" "ZZ"]
-    parser))
-
-(def date-format-pattern
-  (re-pattern
-    (str "(" (string/join ")|(" (reverse (sort-by count (keys date-formatters)))) ")")))
-
-(defn date-parse-pattern [formatter]
-  (re-pattern
-    (string/replace (string/replace formatter #"'([^']+)'" "$1")
-                    date-format-pattern
-                    #(first (date-parsers %)))))
-
-(defn- parser-fn [fmts]
-  (fn [s]
-    (->> (interleave (nfirst (re-seq (date-parse-pattern fmts) s))
-                     (map first (re-seq date-format-pattern fmts)))
-         (partition 2)
-         (sort-by (comp parser-sort-order-pred second)))))
-
-(defn- formatter-fn [fmts formatters]
-  (fn [date & [formatter-overrides]]
-    [(string/replace fmts #"'([^']+)'" "$1")
-     date-format-pattern
-     #(((or formatter-overrides formatters) %) date)]))
+(defn dth [_ dt]
+  (let [d (.getDate dt)]
+    (str d (case d 1 "st" 2 "nd" 3 "rd" 21 "st" 22 "nd" 23 "rd" 31 "st" "th"))))
 
 (defn formatter
   ([fmts]
@@ -209,7 +172,9 @@
   ([fmts dtz]
      (with-meta
        {:format-str fmts
-        :formatters date-formatters}
+        :formatters date-formatters
+        :pre-format {#"dow" "EEEE"}
+        :post-format {#"dth" dth}}
        {:type ::formatter})))
 
 (defn formatter-local [fmts]
@@ -346,20 +311,39 @@ time if supplied."}
 
 (defn unparse
   "Returns a string representing the given DateTime instance in UTC and in the
-form determined by the given formatter."
-  [{:keys [format-str formatters]} dt]
+  form determined by the given formatter."
+  [{:keys [format-str default-year constructor pre-format post-format]
+    :or {constructor goog.date.UtcDateTime}} dt]
   {:pre [(not (nil? dt)) (instance? goog.date.DateTime dt)]}
-  (apply string/replace ((formatter-fn format-str formatters) dt)))
+  (let [post-replace-atom (atom {})
+        post-replace (fn [init k v]
+                       (let [i (or (apply (fnil max 0) (keys @post-replace-atom)) 0)
+                             sym (str "##" i "##")]
+                         (swap! post-replace-atom assoc i [(re-pattern sym) v])
+                         (string/replace init k sym)))
+        format-str (reduce-kv string/replace format-str pre-format)
+        format-str (reduce-kv post-replace format-str post-format)
+        formatter (goog.i18n.DateTimeFormat. format-str)]
+    (reduce-kv (fn [init _ [k v]]
+                 (string/replace init k (v init dt)))
+               (.format formatter dt)
+               @post-replace-atom)))
+
+;; (prn (unparse 
+;;       (formatter "dd/MM/yyyy")
+;;       (time/date-time 2010 3 11 17 49 20 881)))
 
 (defn unparse-local
   "Returns a string representing the given local DateTime instance in the
   form determined by the given formatter."
-  [{:keys [format-str formatters] :as fmt} dt]
+  [{:keys [format-str default-year constructor]
+    :or {constructor goog.date.UtcDateTime}} dt]
   {:pre [(not (nil? dt)) (instance? goog.date.DateTime dt)]}
+  
   (apply string/replace
          ((formatter-fn format-str formatters) dt (assoc date-formatters
-                                                    "Z" (constantly "")
-                                                    "ZZ" (constantly "")))))
+                                                         "Z" (constantly "")
+                                                         "ZZ" (constantly "")))))
 
 (defn unparse-local-date
   "Returns a string representing the given local Date instance in the form
